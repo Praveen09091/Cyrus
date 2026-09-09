@@ -76,7 +76,7 @@ class RiskKernel:
         reasons: List[str] = []
 
         # 0. Structural sanity. A malformed proposal never gets priced.
-        faults = proposal.is_well_formed()
+        faults = proposal.faults()
         checks["well_formed"] = not faults
         if faults:
             reasons.extend("malformed:%s" % f for f in faults)

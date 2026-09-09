@@ -2,6 +2,7 @@
 PyYAML>=6.0
 numpy>=1.24
 
-# Optional: real market data. Without it the registry falls back to the
-# synthetic feed and labels every bar accordingly.
+# Optional for the desk loop, required for any backtest that counts. Without it
+# the registry falls back to the synthetic feed and labels every bar
+# accordingly, and run_backtest.py refuses to grade those bars as evidence.
 # yfinance>=0.2.40

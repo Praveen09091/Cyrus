@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from cyrus.bus.messages import Fill, OrderIntent, Side
+from cyrus.config import Costs, DeskConfig
 
 
 class Broker:
@@ -36,6 +37,17 @@ class PaperBroker(Broker):
     reject_zero_price: bool = True
     submitted: Dict[str, Fill] = field(default_factory=dict)
     log: List[Fill] = field(default_factory=list)
+    # Supplying the desk config lets a paper fill charge the same per-book
+    # venue costs the backtest charged. Without it, the flat figures above
+    # apply to every book.
+    config: Optional[DeskConfig] = None
+
+    def _costs_for(self, book: str) -> Costs:
+        if self.config is None:
+            return Costs(
+                slippage_bps=self.slippage_bps, commission_bps=self.commission_bps
+            )
+        return self.config.costs_for_book(book)
 
     def submit(self, intent: OrderIntent, reference_price: float) -> Fill:
         # Idempotency: the same client order id never fills twice. A retry after
@@ -63,9 +75,10 @@ class PaperBroker(Broker):
             return self._reject(intent, "Quantity is zero or negative.")
 
         # Slippage always against the order.
+        costs = self._costs_for(intent.book)
         direction = 1 if intent.side == Side.LONG else -1
-        fill_price = reference_price * (1.0 + direction * self.slippage_bps / 10_000.0)
-        fees = abs(intent.quantity) * fill_price * self.commission_bps / 10_000.0
+        fill_price = reference_price * (1.0 + direction * costs.slippage)
+        fees = abs(intent.quantity) * fill_price * costs.commission
 
         fill = Fill(
             sender="pilot",
@@ -79,7 +92,7 @@ class PaperBroker(Broker):
             price=round(fill_price, 8),
             status="filled",
             fees=round(fees, 6),
-            slippage_bps=self.slippage_bps,
+            slippage_bps=costs.slippage_bps,
             venue=self.name,
             note="PAPER fill. No real money moved.",
         )

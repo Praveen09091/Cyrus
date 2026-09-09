@@ -27,17 +27,53 @@ without a live, single-use authorisation from the kernel.
 ## Quick start
 
 ```bash
-python3 -m unittest discover -s tests      # 67 tests, no network needed
+python3 -m unittest discover -s tests      # 132 tests, no network needed
 python3 run_desk.py                        # one pass, offline synthetic feed
 python3 run_desk.py --network              # use Yahoo instead (DELAYED data)
 python3 run_desk.py --ask "where do we stand"
 ```
 
-Optional, for real market data:
+For real market data, and therefore for any backtest that counts:
 
 ```bash
 python3 -m pip install yfinance
+python3 run_backtest.py --book us_index
 ```
+
+## Earning the right to trade
+
+A fresh desk trades nothing, by design. Oracle grants zero size to a strategy
+with no out-of-sample record, so the only way to a non-zero position is to give
+it one:
+
+```bash
+python3 run_backtest.py --book us_index    # walk-forward, files a report
+python3 run_backtest.py --book crypto --folds 5
+```
+
+Each run writes a timestamped report to `ledger/backtests/`, and `build_desk`
+loads whichever ones qualify as evidence. The gate is deliberately narrow:
+
+- **Out-of-sample only.** Parameters are chosen on training folds and scored on
+  the next unseen fold. A book with no `optimize` grid fits nothing, so its
+  report labels itself in-sample and is barred from sizing.
+- **Real bars only.** The synthetic feed reports its own label and never
+  qualifies. `run_backtest.py` refuses it outright unless you pass
+  `--allow-synthetic` to exercise the harness.
+- **Pooled per strategy.** Every instrument a strategy trades goes into one
+  record, so a clean SPY result cannot be shown without its losing QQQ sibling.
+- **Thirty trades minimum**, pooled. Below that the number is noise.
+
+Ask any seat what it is waiting for:
+
+```python
+desk.oracle.why_no_size("mean_reversion_z")
+```
+
+The harness is built to be hard to cheat: a decision sees only closed bars and
+fills at the next bar's open, a gap through a stop fills at the open rather
+than the level, a bar touching both stop and target resolves as a stop, and
+sizing runs through the same `size_proposal` the live desk uses.
 
 ## The seats
 
@@ -75,8 +111,14 @@ The objective is `time_alive × equity_above_burn`, not return.
 | Daily loss halt | 3%, clears the next day |
 | Drawdown flatten | 9%, does **not** clear overnight |
 | Reward/risk floor | 2.0 |
+| Book exposure | 30% of equity in notional per book, which is the leverage cap |
 | Correlated books | SPY, QQQ, and BTC share one `risk_on` factor budget |
 | Burn buffer | 6 months of operating cost, untouchable |
+
+Risk caps and leverage caps are different things, and both bind. A 1% risk
+budget divided by a tight stop on a quiet instrument sizes to several times
+equity in notional, so the exposure limit is converted into risk units and
+competes for the same `min()`. Sizing always names the cap that bound.
 
 A flatten needs a human to clear. A desk that cannot cover its burn shrinks or
 idles, because trading harder to make it back is how accounts die.
@@ -94,6 +136,7 @@ cyrus/
   signals/           mean reversion, momentum, trend
   indicators/        core math + spectral diagnostics
   risk/              Kelly, sizing, state, kernel   (no model calls)
+  backtest/          engine, metrics, walk-forward, evidence store
   data/              source registry, Yahoo, synthetic
   execution/         paper broker
   brain/             llm-wiki ingest / query / lint
@@ -120,11 +163,18 @@ viewer, not a dependency.
 
 ## Honest limits
 
-- No proven edge. The strategies are starting points, and Oracle grants zero
-  size to any strategy with no realised out-of-sample record. That is why a
-  fresh desk trades nothing.
-- Yahoo data is delayed. Acceptable for research and the slow books, not for
-  reacting to a 15-minute close.
+- **No proven edge, and the backtests say so.** On three months of 15-minute
+  Yahoo bars, mean reversion pooled across SPY and QQQ came to 77 trades, a
+  49.4% win rate, and net -$23.61. Momentum breakout lost on both BTC and ETH.
+  Kelly resolves to zero and the desk sizes none of it. Three months is one
+  regime and a short sample, so the honest reading is not "these strategies are
+  broken" but "nothing here has earned size yet."
+- Venue costs are estimates until there are measured fills. The shipped figures
+  are per book and sourced in comments in `desk.yaml`; the desk-wide fallback is
+  set to the most expensive venue so a missing override cannot flatter a result.
+- Yahoo data is delayed, and its intraday history is capped at 60 days for
+  15-minute bars. Acceptable for research and the slow books, not for reacting
+  to a 15-minute close, and not enough history for a long-horizon study.
 - The synthetic feed is plumbing, not a market model. Anything built on it is a
   wiring test.
 - A stop is not a guarantee. Gaps, halts, and weekend crypto moves can jump it.

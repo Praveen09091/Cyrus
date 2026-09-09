@@ -61,6 +61,7 @@ class Pilot(Agent):
                 auth.authorization_id, proposal.instrument, auth.quantity
             ),
             instrument=proposal.instrument,
+            book=proposal.book,
             side=proposal.side,
             quantity=auth.quantity,
             order_type="market",
@@ -105,6 +106,7 @@ class Pilot(Agent):
                 sender=self.name,
                 cycle_id=self.ctx.cycle_id,
                 instrument=instrument,
+                book=position.book,
                 side=closing_side,
                 quantity=abs(position.quantity),
                 order_type="market",

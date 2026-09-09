@@ -80,6 +80,9 @@ class Oracle(Agent):
         self.config = config
         self.records: Dict[str, StrategyRecord] = {}
         self.spectral: Dict[str, SpectralReport] = {}
+        # Strategy -> why its stored backtest was refused as evidence. A desk
+        # that stands down should be able to say what it is waiting for.
+        self.evidence_refusals: Dict[str, str] = {}
         super().__init__(ctx)
 
     def register(self) -> None:
@@ -89,6 +92,19 @@ class Oracle(Agent):
 
     def record_outcome(self, strategy: str, pnl: float) -> None:
         self.records.setdefault(strategy, StrategyRecord(strategy)).record(pnl)
+
+    def why_no_size(self, strategy: str) -> str:
+        """What this strategy is waiting for before it can be sized."""
+        record = self.records.get(strategy)
+        if record is not None and record.sample_size > 0:
+            return "Has a %d-trade record." % record.sample_size
+        refusal = self.evidence_refusals.get(strategy)
+        if refusal:
+            return "Backtest on file was refused as evidence: %s." % refusal
+        return (
+            "No record and no backtest on file. Run: python3 run_backtest.py "
+            "--book <book>"
+        )
 
     def kelly_for(self, proposal: Proposal) -> KellyEstimate:
         """Kelly from realised results, or an explicit zero.
@@ -198,8 +214,8 @@ class Oracle(Agent):
             self.emit(self._vote(
                 proposal,
                 Stance.ABSTAIN,
-                "No realised track record for %s. Oracle grants no edge estimate, so size "
-                "stays at zero until the ledger has trades." % proposal.strategy,
+                "No usable track record for %s. Oracle grants no edge estimate, so size "
+                "stays at zero. %s" % (proposal.strategy, self.why_no_size(proposal.strategy)),
                 0.0,
             ))
             return

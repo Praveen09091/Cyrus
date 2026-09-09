@@ -45,6 +45,13 @@ books:
     timeframe: 15m
     session: us_cash        # 09:30-16:00 America/New_York
     max_risk_pct: 0.75
+    # Costs are venue facts, not tuning knobs. Commission-free US equity
+    # brokers still pass through regulatory fees (SEC Section 31 on sells plus
+    # FINRA TAF), which round trip to roughly a basis point. Slippage assumes
+    # a penny-wide SPY spread crossed on entry and exit. Both must be replaced
+    # with measured fills once the desk has live ones (AGENTS.md §9).
+    slippage_bps: 2.0
+    commission_bps: 1.0
     params:
       lookback: 20
       entry_z: {SPY: 1.5, QQQ: 1.8}
@@ -52,6 +59,12 @@ books:
       atr_period: 14
       atr_stop_mult: 2.0
       min_edge_atr: 0.5     # the trip back to the mean must beat one bar of noise
+    # Grid searched on walk-forward training folds only. Kept deliberately
+    # small: every extra combination buys another chance to fit noise.
+    optimize:
+      entry_z: [1.5, 2.0, 2.5]
+      atr_stop_mult: [1.5, 2.0, 2.5]
+      min_edge_atr: [0.5, 0.75]
 
   crypto:
     enabled: true
@@ -60,12 +73,20 @@ books:
     timeframe: 1h
     session: always
     max_risk_pct: 0.5       # smaller: 24/7 gaps, no circuit breakers
+    # Centralised-exchange taker fee. Kept at taker because a momentum
+    # breakout is by definition crossing the spread, not resting on it.
+    slippage_bps: 5.0
+    commission_bps: 10.0
     params:
       breakout_lookback: 20
       volume_mult: 1.5
       atr_period: 14
       atr_stop_mult: 2.5
       trail_atr_mult: 2.0
+    optimize:
+      breakout_lookback: [20, 40, 60]
+      volume_mult: [1.2, 1.5, 2.0]
+      atr_stop_mult: [2.0, 2.5, 3.0]
 
   commodity:
     enabled: true
@@ -74,11 +95,19 @@ books:
     timeframe: 4h
     session: us_cash
     max_risk_pct: 0.5
+    # GLD and USO are US-listed ETFs, so the equity cost model applies, with a
+    # wider spread assumption than SPY because USO is thinner.
+    slippage_bps: 3.0
+    commission_bps: 1.0
     params:
       fast_ema: 50
       slow_ema: 200
       atr_period: 14
       atr_stop_mult: 3.0
+    optimize:
+      fast_ema: [20, 50]
+      slow_ema: [100, 200]
+      atr_stop_mult: [2.5, 3.0, 3.5]
 
   india:
     enabled: false          # enable after Upstox is wired and paper-proven
@@ -87,6 +116,10 @@ books:
     timeframe: 1d
     session: nse
     max_risk_pct: 0.5
+    # Indian equities carry STT, exchange charges, stamp duty and GST on top of
+    # brokerage, which is why this is far above the US figure.
+    slippage_bps: 5.0
+    commission_bps: 12.0
     params:
       fast_ema: 20
       slow_ema: 50
@@ -110,7 +143,10 @@ liquidity:
 
 execution:
   venue: paper              # paper | alpaca | ibkr | binance | upstox
+  # Desk-wide fallback, used by any book that does not override below. Set to
+  # the most expensive venue the desk touches so a missing override is
+  # pessimistic rather than flattering.
   slippage_bps: 5.0
-  commission_bps: 0.0
+  commission_bps: 10.0
   reject_outside_session: true
   idempotent_client_ids: true

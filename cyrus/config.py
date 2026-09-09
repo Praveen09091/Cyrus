@@ -27,6 +27,14 @@ class BookConfig:
     session: str
     max_risk_pct: float
     params: Dict[str, Any] = field(default_factory=dict)
+    # Parameter grid for walk-forward selection. Empty means nothing is fitted,
+    # which the walk-forward report must then label as in-sample.
+    optimize: Dict[str, List[Any]] = field(default_factory=dict)
+    # Venue costs for this book. None falls back to the desk-wide figure, which
+    # is set to the most expensive venue so a missing override cannot flatter a
+    # result.
+    slippage_bps: Optional[float] = None
+    commission_bps: Optional[float] = None
 
 
 @dataclass
@@ -69,6 +77,22 @@ class LiquidityConfig:
 
 
 @dataclass
+class Costs:
+    """What one round trip costs on a given book's venue, in basis points."""
+
+    slippage_bps: float
+    commission_bps: float
+
+    @property
+    def slippage(self) -> float:
+        return self.slippage_bps / 10_000.0
+
+    @property
+    def commission(self) -> float:
+        return self.commission_bps / 10_000.0
+
+
+@dataclass
 class ExecutionConfig:
     venue: str
     slippage_bps: float
@@ -104,6 +128,30 @@ class DeskConfig:
 
     def book(self, name: str) -> Optional[BookConfig]:
         return self.books.get(name)
+
+    def costs_for(self, book: Optional[BookConfig]) -> Costs:
+        """Slippage and commission for a book, in basis points.
+
+        Takes the book object rather than its name so a caller holding a book
+        definition gets that book's costs, not whatever the global config
+        happens to have registered under the same name.
+        """
+        slippage = self.execution.slippage_bps
+        commission = self.execution.commission_bps
+        if book is not None:
+            if book.slippage_bps is not None:
+                slippage = book.slippage_bps
+            if book.commission_bps is not None:
+                commission = book.commission_bps
+        return Costs(slippage_bps=slippage, commission_bps=commission)
+
+    def costs_for_book(self, name: Optional[str]) -> Costs:
+        """Costs by book name, for callers that only have the name on a message.
+
+        An unknown book falls back to the desk-wide figures rather than to
+        zero, because a book nobody configured is not a free one.
+        """
+        return self.costs_for(self.books.get(name or ""))
 
     def factor_for_book(self, book: str) -> Optional[FactorConfig]:
         """The factor budget a book draws from.
@@ -152,6 +200,14 @@ def load_desk_config(path: Optional[str] = None) -> DeskConfig:
 
     books: Dict[str, BookConfig] = {}
     for name, spec in (raw.get("books") or {}).items():
+        params = dict(spec.get("params") or {})
+        # The grid lives beside the params in YAML but must not leak into them,
+        # or a strategy would read a list where it expects a number.
+        optimize = {
+            key: list(values)
+            for key, values in (spec.get("optimize") or {}).items()
+            if isinstance(values, list) and values
+        }
         books[name] = BookConfig(
             name=name,
             enabled=bool(spec.get("enabled", False)),
@@ -160,7 +216,10 @@ def load_desk_config(path: Optional[str] = None) -> DeskConfig:
             timeframe=str(spec.get("timeframe", "")),
             session=str(spec.get("session", "always")),
             max_risk_pct=float(spec.get("max_risk_pct", 0.5)),
-            params=dict(spec.get("params") or {}),
+            params=params,
+            optimize=optimize,
+            slippage_bps=_optional_float(spec.get("slippage_bps")),
+            commission_bps=_optional_float(spec.get("commission_bps")),
         )
 
     factors: Dict[str, FactorConfig] = {}
@@ -192,6 +251,13 @@ def load_agent_config(path: Optional[str] = None) -> Dict[str, Any]:
     path = path or os.path.join(CONFIG_DIR, "agents.yaml")
     with open(path, "r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    """None stays None so the desk-wide fallback applies; 0.0 stays 0.0."""
+    if value is None:
+        return None
+    return float(value)
 
 
 def _defaults(given: Dict[str, Any], defaults: Dict[str, Any]) -> Dict[str, Any]:
@@ -233,6 +299,36 @@ def _validate(config: DeskConfig) -> None:
         if book.enabled and not book.instruments:
             problems.append("book %s is enabled with no instruments" % book.name)
 
+        for label, value in (
+            ("slippage_bps", book.slippage_bps),
+            ("commission_bps", book.commission_bps),
+        ):
+            if value is not None and value < 0:
+                problems.append("book %s has a negative %s" % (book.name, label))
+
+        costs = config.costs_for(book)
+        if book.enabled and costs.slippage_bps + costs.commission_bps <= 0:
+            problems.append(
+                "book %s trades at zero cost; a result without fees and slippage "
+                "is not a result (AGENTS.md §9)" % book.name
+            )
+
+        # A grid key that does not match a real parameter optimises nothing and
+        # fails silently, so a typo here has to be a load-time error.
+        for key in book.optimize:
+            if key not in book.params:
+                problems.append(
+                    "book %s optimises %r, which is not one of its params" % (book.name, key)
+                )
+        combinations = 1
+        for values in book.optimize.values():
+            combinations *= len(values)
+        if combinations > 64:
+            problems.append(
+                "book %s grid has %d combinations; every extra one is another "
+                "chance to fit noise (64 is the ceiling)" % (book.name, combinations)
+            )
+
     if problems:
         raise ValueError("Invalid desk config:\n  - " + "\n  - ".join(problems))
 
@@ -246,6 +342,7 @@ __all__ = [
     "BurnConfig",
     "LiquidityConfig",
     "ExecutionConfig",
+    "Costs",
     "DeskConfig",
     "load_desk_config",
     "load_agent_config",

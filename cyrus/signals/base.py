@@ -2,7 +2,7 @@
 
 A strategy turns bars into at most one proposal. It never sizes, never decides,
 and never sends. It must attach a stop and an invalidation, or the proposal is
-structurally faulty and dies before sizing (see Proposal.is_well_formed).
+structurally faulty and dies before sizing (see Proposal.faults).
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ class Strategy:
         proposal = self.evaluate(ctx)
         if proposal is None:
             return None
-        if proposal.is_well_formed():
+        if proposal.faults():
             # A malformed proposal is a strategy bug. Drop it rather than let
             # the risk kernel spend a cycle rejecting the same fault forever.
             return None

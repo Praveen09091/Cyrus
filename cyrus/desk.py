@@ -79,6 +79,7 @@ def build_desk(
     calendar: Optional[List[CalendarEvent]] = None,
     news_available: bool = False,
     allow_network: bool = True,
+    load_backtest_evidence: bool = True,
 ) -> Desk:
     config = config or load_desk_config()
     ledger_dir = ledger_dir or os.path.join(REPO_ROOT, "ledger")
@@ -97,6 +98,7 @@ def build_desk(
         broker = PaperBroker(
             slippage_bps=config.execution.slippage_bps,
             commission_bps=config.execution.commission_bps,
+            config=config,
         )
     if broker.is_live and not config.is_live:
         raise ValueError("A live broker was supplied while the desk mode is paper.")
@@ -112,6 +114,8 @@ def build_desk(
     )
     chartist = Chartist(SeatContext(bus=bus, narrator=narrator), sources)
     oracle = Oracle(SeatContext(bus=bus, narrator=narrator), config)
+    if load_backtest_evidence:
+        _seed_oracle(oracle, os.path.join(ledger_dir, "backtests"))
     sentinel = Sentinel(SeatContext(bus=bus), kernel)
     pilot = Pilot(SeatContext(bus=bus), broker, kernel)
     ledger = Ledger(SeatContext(bus=bus, narrator=narrator), ledger_dir)
@@ -149,6 +153,26 @@ def build_desk(
         ledger=ledger,
         quartermaster=quartermaster,
     )
+
+
+def _seed_oracle(oracle: Oracle, backtest_dir: str) -> None:
+    """Give Oracle whatever out-of-sample record exists, and nothing else.
+
+    Records that fail the evidence test are attached as stated refusals rather
+    than dropped, so ``why_no_size`` can name the reason instead of leaving the
+    desk to look like it is standing down for no reason.
+    """
+    from cyrus.backtest.store import refusals, strategy_records
+
+    try:
+        records = strategy_records(backtest_dir)
+        declined = refusals(backtest_dir)
+    except OSError:
+        return
+
+    for strategy, record in records.items():
+        oracle.records[strategy] = record
+    oracle.evidence_refusals.update(declined)
 
 
 __all__ = ["Desk", "build_desk"]

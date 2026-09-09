@@ -140,8 +140,12 @@ class Proposal(Envelope):
             return 0.0
         return abs(self.target - self.entry) / risk
 
-    def is_well_formed(self) -> List[str]:
-        """Structural faults. A proposal with faults never reaches sizing."""
+    def faults(self) -> List[str]:
+        """Structural faults. A proposal with faults never reaches sizing.
+
+        Returns the empty list when the proposal is sound, so callers read as
+        ``if proposal.faults(): reject``.
+        """
         faults: List[str] = []
         if self.side not in (Side.LONG, Side.SHORT):
             faults.append("no_direction")
@@ -225,6 +229,7 @@ class OrderIntent(Envelope):
     authorization_id: str = ""
     client_order_id: str = ""
     instrument: str = ""
+    book: str = ""
     side: Side = Side.FLAT
     quantity: float = 0.0
     order_type: str = "market"

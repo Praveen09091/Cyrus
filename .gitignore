@@ -12,6 +12,10 @@ ledger/*.jsonl
 ledger/bus/
 ledger/journal-*.jsonl
 
+# Backtest reports are regenerated from the data and the config, and each run
+# writes a new timestamped file. Keep the directory, not its contents.
+ledger/backtests/*.json
+
 # Python
 __pycache__/
 *.py[cod]

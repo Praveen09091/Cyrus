@@ -256,6 +256,43 @@ class TestFactorBudget(GateFixture):
         self.assertEqual(sizing.binding_constraint, "book_remaining")
 
 
+class TestLeverage(GateFixture):
+    """A risk cap is not a leverage cap. Both have to bind."""
+
+    def test_notional_never_exceeds_the_book_exposure_limit(self):
+        sizing = size_proposal(make_proposal(), self.config, self.state, good_kelly())
+        cap = self.config.equity * self.config.risk.max_book_exposure_pct / 100.0
+        self.assertTrue(sizing.is_tradeable)
+        self.assertLessEqual(sizing.notional, cap + 1e-6)
+
+    def test_a_tight_stop_is_bound_by_exposure_not_by_risk(self):
+        """The failure this guards against: 1% risk becoming 4x equity.
+
+        A 0.2% stop on a $500 instrument sizes to $500k of notional under a
+        pure risk cap, on $100k of equity. The exposure cap has to be what
+        binds, and it has to say so.
+        """
+        tight = make_proposal(entry=500.0, stop=499.0, target=503.0)
+        sizing = size_proposal(tight, self.config, self.state, good_kelly())
+        self.assertEqual(sizing.binding_constraint, "book_exposure")
+        self.assertLessEqual(
+            sizing.notional,
+            self.config.equity * self.config.risk.max_book_exposure_pct / 100.0 + 1e-6,
+        )
+
+    def test_open_notional_consumes_the_exposure_budget(self):
+        cap = self.config.equity * self.config.risk.max_book_exposure_pct / 100.0
+        self.state.open_position(
+            Position(
+                instrument="QQQ", book="us_index", side=Side.LONG,
+                quantity=cap / 450.0, entry=450.0, stop=449.0,
+            )
+        )
+        sizing = size_proposal(make_proposal(), self.config, self.state, good_kelly())
+        self.assertFalse(sizing.is_tradeable)
+        self.assertEqual(sizing.binding_constraint, "book_exposure")
+
+
 class TestKelly(unittest.TestCase):
     def test_no_edge_means_no_size(self):
         est = kelly.estimate(win_rate=0.4, win_payoff=1.0, sample_size=500, out_of_sample=True)
@@ -311,6 +348,34 @@ class TestExecutionSeat(GateFixture):
         self.broker = PaperBroker(slippage_bps=5.0)
         self.sentinel = Sentinel(SeatContext(bus=self.bus), self.kernel)
         self.pilot = Pilot(SeatContext(bus=self.bus), self.broker, self.kernel)
+
+    def test_the_paper_fill_charges_the_book_its_venue_costs(self):
+        """Paper and backtest must charge the same thing, or neither is a test.
+
+        The broker only ever sees an OrderIntent, so the book has to travel on
+        the message for the right venue costs to be applied.
+        """
+        broker = PaperBroker(slippage_bps=999.0, commission_bps=999.0, config=self.config)
+        pilot = Pilot(SeatContext(bus=Bus()), broker, self.kernel)
+        proposal = make_proposal()
+        verdict = self.sentinel.review(proposal, kelly=good_kelly(), approving_votes=3)
+        self.assertTrue(verdict.approved, verdict.reasons)
+
+        fill = pilot.execute(verdict, proposal)
+        expected = self.config.costs_for_book("us_index")
+        self.assertEqual(fill.status, "filled")
+        self.assertEqual(fill.slippage_bps, expected.slippage_bps)
+        self.assertAlmostEqual(
+            fill.fees,
+            round(fill.quantity * fill.price * expected.commission, 6),
+            places=6,
+        )
+
+    def test_a_broker_without_config_falls_back_to_its_flat_costs(self):
+        proposal = make_proposal()
+        verdict = self.sentinel.review(proposal, kelly=good_kelly(), approving_votes=3)
+        fill = self.pilot.execute(verdict, proposal)
+        self.assertEqual(fill.slippage_bps, 5.0)
 
     def test_pilot_refuses_an_unapproved_verdict(self):
         proposal = make_proposal()

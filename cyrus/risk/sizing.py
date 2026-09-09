@@ -43,13 +43,18 @@ def size_proposal(
 ) -> SizingResult:
     """Convert a proposal plus an edge estimate into a quantity.
 
-    Caps considered, all in dollars of risk:
+    Caps considered, all expressed in dollars of risk so the tightest one can
+    simply win a ``min()``:
       - per-trade cap from desk risk config
       - book cap
+      - book notional exposure, converted into risk units
       - remaining factor budget for correlated books
       - Kelly's own recommendation, already fractional and sample-discounted
     """
-    equity = config.equity
+    # Current equity, not starting capital. Risk has to shrink with the
+    # account, or a losing run keeps betting the same dollars into a smaller
+    # balance and the drawdown compounds against itself.
+    equity = state.equity
     risk_per_unit = proposal.risk_per_unit
     if equity <= 0 or risk_per_unit <= 0:
         return SizingResult(0.0, 0.0, 0.0, 0.0, "invalid_inputs", {}, "No equity or no stop distance.")
@@ -61,6 +66,15 @@ def size_proposal(
     if book is not None:
         book_cap_total = equity * book.max_risk_pct / 100.0
         caps["book_remaining"] = max(0.0, book_cap_total - state.book_risk_usd(proposal.book))
+
+    # Risk caps alone do not bound leverage. A tight stop on a low-volatility
+    # instrument turns a 1% risk budget into multiples of equity in notional,
+    # which is a margin call the risk arithmetic never sees coming. Convert the
+    # exposure limit into the same risk units so it competes in the same min().
+    if book is not None and proposal.entry > 0:
+        exposure_total = equity * config.risk.max_book_exposure_pct / 100.0
+        exposure_left = max(0.0, exposure_total - state.book_notional(proposal.book))
+        caps["book_exposure"] = (exposure_left / proposal.entry) * risk_per_unit
 
     factor = config.factor_for_book(proposal.book)
     if factor is not None:
