@@ -1,0 +1,7 @@
+# Core. The desk runs on these alone, offline.
+PyYAML>=6.0
+numpy>=1.24
+
+# Optional: real market data. Without it the registry falls back to the
+# synthetic feed and labels every bar accordingly.
+# yfinance>=0.2.40

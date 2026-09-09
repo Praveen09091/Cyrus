@@ -1,0 +1,116 @@
+# Cyrus desk configuration.
+# Every number here is a hard limit enforced by cyrus/risk/kernel.py.
+# Widening a limit to make a strategy look better is forbidden (AGENTS.md §9).
+
+mode: paper                 # paper | micro_live | live
+base_currency: USD
+
+capital:
+  paper_equity: 100000.0    # simulated equity for the paper loop
+  live_equity: 0.0          # set only when a real account is connected
+  cash_buffer_months: 6     # months of burn Cyrus keeps untouched
+
+burn:
+  # Monthly operating cost. Cyrus must cover this before size-up.
+  llm_usd: 40.0
+  vps_usd: 10.0
+  data_usd: 0.0
+  hurdle_multiple: 2.0      # 90d expectancy must exceed burn * this
+
+risk:
+  kelly_fraction: 0.25      # quarter Kelly. Never raise above 0.5.
+  max_risk_per_trade_pct: 1.0
+  max_open_positions: 6
+  max_book_exposure_pct: 30.0
+  daily_loss_halt_pct: 3.0
+  drawdown_flatten_pct: 9.0 # peak-to-trough equity, then go flat and stop
+  min_reward_risk: 2.0
+  consensus_quorum: 3       # independent approving seats required
+  consensus_runs: 3         # desk runs per decision; disagreement means cash
+
+factors:
+  # Correlated books draw from one budget. SPY + QQQ + BTC long is one bet.
+  risk_on:
+    budget_pct: 1.5         # total equity at risk across all risk-on legs
+    books: [us_index, crypto, commodity]
+  rates:
+    budget_pct: 1.0
+    books: [commodity]
+
+books:
+  us_index:
+    enabled: true
+    instruments: [SPY, QQQ]
+    style: mean_reversion
+    timeframe: 15m
+    session: us_cash        # 09:30-16:00 America/New_York
+    max_risk_pct: 0.75
+    params:
+      lookback: 20
+      entry_z: {SPY: 1.5, QQQ: 1.8}
+      exit_z: 0.2
+      atr_period: 14
+      atr_stop_mult: 2.0
+      min_edge_atr: 0.5     # the trip back to the mean must beat one bar of noise
+
+  crypto:
+    enabled: true
+    instruments: [BTC-USD, ETH-USD]
+    style: momentum
+    timeframe: 1h
+    session: always
+    max_risk_pct: 0.5       # smaller: 24/7 gaps, no circuit breakers
+    params:
+      breakout_lookback: 20
+      volume_mult: 1.5
+      atr_period: 14
+      atr_stop_mult: 2.5
+      trail_atr_mult: 2.0
+
+  commodity:
+    enabled: true
+    instruments: [GLD, USO]
+    style: trend
+    timeframe: 4h
+    session: us_cash
+    max_risk_pct: 0.5
+    params:
+      fast_ema: 50
+      slow_ema: 200
+      atr_period: 14
+      atr_stop_mult: 3.0
+
+  india:
+    enabled: false          # enable after Upstox is wired and paper-proven
+    instruments: [RELIANCE.NS, INFY.NS]
+    style: trend
+    timeframe: 1d
+    session: nse
+    max_risk_pct: 0.5
+    params:
+      fast_ema: 20
+      slow_ema: 50
+      atr_period: 14
+      atr_stop_mult: 2.5
+
+  event:
+    enabled: false          # Polymarket, binary payoff, tiny size only
+    instruments: []
+    style: event
+    timeframe: event
+    session: always
+    max_risk_pct: 0.1
+    params: {}
+
+liquidity:
+  # A signal on an illiquid name is a landmine, not an opportunity.
+  min_avg_dollar_volume: 5000000.0
+  memecoin_max_risk_pct: 0.1
+  memecoin_requires_human: true
+
+execution:
+  venue: paper              # paper | alpaca | ibkr | binance | upstox
+  slippage_bps: 5.0
+  commission_bps: 0.0
+  reject_outside_session: true
+  idempotent_client_ids: true

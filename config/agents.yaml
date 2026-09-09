@@ -1,0 +1,177 @@
+# Cyrus agent roster: hierarchy, wiring, and data sources per seat.
+# Hierarchy is about authority, not about who talks first.
+# Authority: cyrus decides, sentinel vetoes, pilot executes. Nobody else.
+
+hierarchy:
+  cyrus:
+    reports_to: human
+    manages: [atlas, scout, athena, chartist, oracle, sentinel, pilot, ledger, quartermaster]
+    authority: decide
+  atlas:      { reports_to: cyrus, authority: propose }
+  scout:      { reports_to: cyrus, authority: propose }
+  athena:     { reports_to: cyrus, authority: propose }
+  chartist:   { reports_to: cyrus, authority: propose }
+  oracle:     { reports_to: cyrus, authority: propose }
+  sentinel:   { reports_to: human, authority: veto }      # answers to the human, not to Cyrus
+  pilot:      { reports_to: cyrus, authority: execute_authorized_only }
+  ledger:     { reports_to: human, authority: record }
+  quartermaster: { reports_to: human, authority: record }
+
+agents:
+  cyrus:
+    class: orchestrator
+    role: Desk brain. Routes work, synthesises specialist output, decides, answers
+      the user, and owns every outcome including the losses.
+    responsibilities:
+      - Open a cycle and fan out scan requests to intelligence seats
+      - Run the desk `consensus_runs` times and keep only quorum survivors
+      - Merge conflicting reads into one decision with a written reason
+      - Answer human queries from the wiki with citations
+      - Write the post-mortem when something goes wrong and name the bad input
+    consumes: [Observation, Proposal, Vote, SizeDecision, Verdict, Fill, Alert]
+    emits: [ScanRequest, Decision, LedgerEntry]
+    llm: required
+    sources: [wiki]
+
+  atlas:
+    class: intelligence
+    role: Macro weather. Rates, dollar, energy, gold, and the risk-on/risk-off tide
+      every book floats on.
+    responsibilities:
+      - Classify the current regime (risk_on, risk_off, chop, stress)
+      - Flag macro event risk inside the next 48 hours
+      - Veto-by-observation: mark regimes where a book's style historically fails
+    consumes: [ScanRequest]
+    emits: [Observation, Vote]
+    llm: required
+    sources: [yahoo_macro, fred_optional, news]
+    watches: [^VIX, DX-Y.NYB, ^TNX, CL=F, GC=F, NG=F]
+
+  scout:
+    class: intelligence
+    role: Recon on crypto and the social tape. Finds what is moving before the feed
+      does, and screens out what cannot be exited.
+    responsibilities:
+      - Surface unusual volume and momentum in the crypto book
+      - Screen liquidity before any name is proposable
+      - Label every social read ASSUMPTION unless it links to a raw/ source
+      - Memecoins are flagged, size-capped, and require a human stamp
+    consumes: [ScanRequest]
+    emits: [Observation, Vote]
+    llm: required
+    sources: [yahoo_crypto, coingecko_optional, x_ct_optional, dexscreener_optional]
+
+  athena:
+    class: intelligence
+    role: News, filings, and event calendar. Answers "is this already priced in".
+    responsibilities:
+      - Attach a catalyst or explicitly state there is none
+      - Block entries inside earnings and known event windows
+      - Separate SOURCED facts from MY READ in every observation
+    consumes: [ScanRequest]
+    emits: [Observation, Vote]
+    llm: required
+    sources: [news, yahoo_fundamentals, finnhub_optional, upstox_optional]
+
+  chartist:
+    class: analysis
+    role: Owns price structure. Indicators, levels, and where the idea is wrong.
+    responsibilities:
+      - Compute the indicator set for the book's style and timeframe
+      - Produce a proposal with entry, stop, target, and invalidation
+      - State the bear case in the same message as the bull case
+      - Never propose without a stop level
+    consumes: [ScanRequest, Observation]
+    emits: [Proposal, Vote]
+    llm: optional            # indicator math is deterministic; narration is LLM
+    sources: [yahoo_bars, tradingview_optional, gainzalgo_optional]
+
+  oracle:
+    class: analysis
+    role: Quant seat. Backtests, forecasts in probabilities, estimates Kelly, and
+      runs spectral diagnostics without believing them.
+    responsibilities:
+      - Estimate win rate and payoff from the strategy's own out-of-sample record
+      - Emit a Kelly fraction, never a full-Kelly size
+      - Run windowed spectral analysis as a diagnostic only, never as a trigger
+      - Kill any strategy whose live behaviour drifts from its test
+    consumes: [Proposal, Observation]
+    emits: [SizeRequest, Observation, Vote]
+    llm: optional
+    sources: [yahoo_bars, ledger, qanat_optional]
+
+  sentinel:
+    class: risk
+    role: The word no. Sizes nothing it cannot justify and holds veto power over
+      every order. Deterministic by design.
+    responsibilities:
+      - Enforce per-trade risk cap, book cap, and factor budget
+      - Enforce session, liquidity, correlation, and reward/risk floors
+      - Trip the daily loss halt and the drawdown flatten switch
+      - Refuse any order whose burn coverage is failing
+      - Issue the authorization_id that Pilot requires
+    consumes: [Proposal, SizeDecision]
+    emits: [Verdict, Alert]
+    llm: forbidden
+    sources: [ledger, desk_config]
+
+  pilot:
+    class: execution
+    role: Places orders. Only orders that carry a valid Sentinel authorisation.
+    responsibilities:
+      - Reject any intent without a matching authorization_id
+      - Use idempotent client order ids
+      - Report fills, partials, and rejects verbatim
+      - Never modify a stop away from entry
+    consumes: [Verdict]
+    emits: [OrderIntent, Fill, Alert]
+    llm: forbidden
+    sources: [broker_adapter]
+
+  ledger:
+    class: record
+    role: The book. Journals every decision, especially the bad ones, and grades
+      old theses against what the market actually did.
+    responsibilities:
+      - Append every decision, verdict, order, and fill
+      - Grade closed trades against their original thesis
+      - Surface repeated mistakes as candidate rules
+      - Never rewrite history
+    consumes: [Decision, Verdict, Fill, Alert]
+    emits: [LedgerEntry, Observation]
+    llm: optional
+    sources: [ledger]
+
+  quartermaster:
+    class: treasury
+    role: Keeps Cyrus alive. Tracks burn, cash buffer, and the self-pay hurdle.
+    responsibilities:
+      - Compute monthly burn and months of runway
+      - Compare 90-day expectancy against burn * hurdle_multiple
+      - Recommend shrink or idle when coverage fails
+      - Gate every size-up step
+    consumes: [Fill, LedgerEntry]
+    emits: [Observation, Alert]
+    llm: forbidden
+    sources: [ledger, desk_config]
+
+sources:
+  yahoo_bars:        { kind: bars,    provider: yahoo,    realtime: false, note: "DELAYED free data" }
+  yahoo_macro:       { kind: bars,    provider: yahoo,    realtime: false }
+  yahoo_crypto:      { kind: bars,    provider: yahoo,    realtime: false }
+  yahoo_fundamentals:{ kind: facts,   provider: yahoo,    realtime: false }
+  news:              { kind: text,    provider: web,      realtime: false }
+  ledger:            { kind: records, provider: local,    realtime: true }
+  desk_config:       { kind: config,  provider: local,    realtime: true }
+  wiki:              { kind: text,    provider: local,    realtime: true }
+  broker_adapter:    { kind: orders,  provider: paper,    realtime: true }
+  # Optional, wired only after the paper loop is boring:
+  fred_optional:        { kind: bars,   provider: fred,        enabled: false }
+  finnhub_optional:     { kind: facts,  provider: finnhub,     enabled: false }
+  upstox_optional:      { kind: bars,   provider: upstox,      enabled: false }
+  tradingview_optional: { kind: levels, provider: tradingview, enabled: false }
+  gainzalgo_optional:   { kind: signal, provider: tradingview, enabled: false }
+  coingecko_optional:   { kind: bars,   provider: coingecko,   enabled: false }
+  dexscreener_optional: { kind: bars,   provider: dexscreener, enabled: false }
+  x_ct_optional:        { kind: text,   provider: x,           enabled: false }
+  qanat_optional:       { kind: alpha,  provider: qanat,       enabled: false }

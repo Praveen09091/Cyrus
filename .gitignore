@@ -1,0 +1,36 @@
+# Secrets. Never commit these.
+.env
+.env.*
+*.key
+*.pem
+credentials.json
+secrets.yaml
+
+# The trade record is machine-generated and grows without bound.
+# The README in each directory is tracked; the data is not.
+ledger/*.jsonl
+ledger/bus/
+ledger/journal-*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# OS and editor
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+# Obsidian workspace state (the vault content itself is tracked)
+.obsidian/workspace*
+.obsidian/cache
