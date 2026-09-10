@@ -27,11 +27,18 @@ without a live, single-use authorisation from the kernel.
 ## Quick start
 
 ```bash
-python3 -m unittest discover -s tests      # 132 tests, no network needed
+python3 -m unittest discover -s tests      # 142 tests, no network needed
 python3 run_desk.py                        # one pass, offline synthetic feed
 python3 run_desk.py --network              # use Yahoo instead (DELAYED data)
 python3 run_desk.py --ask "where do we stand"
+python3 run_desk.py --llm           # Flash/Pro narration; needs GEMINI_API_KEY
 ```
+
+Language models are optional narrators. Flash seats restate findings; Pro
+(Cyrus) answers the human. Sentinel, Pilot, and Quartermaster never call a
+model. See `config/models.yaml` and `wiki/concepts/model-routing.md`. Local
+Gemma 4 via Ollama is the same client: point `base_url` at
+`http://127.0.0.1:11434/v1`.
 
 For real market data, and therefore for any backtest that counts:
 
@@ -130,6 +137,7 @@ AGENTS.md            desk constitution + llm-wiki schema
 config/
   desk.yaml          books, risk limits, burn (validated on load)
   agents.yaml        roster, hierarchy, per-seat data sources
+  models.yaml        Flash/Pro LLM routing (off by default)
 cyrus/
   bus/               typed envelopes + journaled pub/sub
   agents/            the ten seats
